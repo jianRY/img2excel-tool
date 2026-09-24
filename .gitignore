@@ -1,0 +1,31 @@
+# ---- 构建产物 ----
+build/
+dist/
+.pybuild_cache/
+*.spec.bak
+*.pyc
+__pycache__/
+
+# ---- 运行/测试残留 ----
+*.selftest.log
+selftest_*.xlsx
+test_out.xlsx
+probe_table_log.txt
+*.log
+
+# ---- 敏感物（绝不提交）----
+*.pfx
+*.p12
+pfx_pass.txt
+gh_token.txt
+*.cer
+*.key
+
+# ---- 工作暂存 ----
+archive/
+verify/
+pdf_list.txt
+model_hash.txt
+
+# 本机工作文档（含本地绝对路径，不进公开仓库；对外用 README.md）
+使用说明.md
