@@ -740,16 +740,15 @@ def make_update_json(ver, onefile, installer, notes):
         "asset": base_asset,
         "notes": notes or "",
         "url": "%s/releases/download/%s/%s" % (gh, tag, base_asset),
-        "fallback_url": "%s/files/%s" % (site, base_asset),
         "release_url": "%s/releases/tag/%s" % (gh, tag),
-        "site_url": site + "/",
         "size": os.path.getsize(onefile),
         "sha256": _sha256_of(onefile),
         "published": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
+    # ⚠️ 不写入 fallback_url / site_url：update.json 是**随 Release 公开的资产**，
+    #    把私有更新地址写进去等于把它公开。客户端只走 url（GitHub 直链）+ 加速镜像。
     if installer and os.path.exists(installer):
         data["setup_url"] = "%s/releases/download/%s/%s" % (gh, tag, setup_asset)
-        data["setup_fallback_url"] = "%s/files/%s" % (site, setup_asset)
         data["setup_size"] = os.path.getsize(installer)
         data["setup_sha256"] = _sha256_of(installer)
 
@@ -759,7 +758,7 @@ def make_update_json(ver, onefile, installer, notes):
         json.dump(data, f, ensure_ascii=False, indent=2)
     log("更新元数据 -> %s" % path)
     log("  url          = %s" % data["url"])
-    log("  fallback_url = %s" % data["fallback_url"])
+    log("  release_url  = %s" % data["release_url"])
     log("  size=%d  sha256=%s…" % (data["size"], data["sha256"][:12]))
     return path, data
 
