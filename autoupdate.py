@@ -90,8 +90,12 @@ UA = (
 #    但也**改不得**：改默认值会让所有已发布版本失去兜底源。
 #    要做环境隔离（内网镜像、联调）用环境变量 IMG2EXCEL_UPDATE_SITE 覆盖，
 #    不要动下面的默认值。
+try:
+    from _endpoints import SITE_URL as _ENDPOINT_SITE   # 本机私有，.gitignore 已排除
+except Exception:
+    _ENDPOINT_SITE = ""
 SITE_URL = ((os.environ.get("IMG2EXCEL_UPDATE_SITE") or "").strip()
-            or "http://download.internal:8888")
+            or _ENDPOINT_SITE)
 
 # GitHub 仓库 → 服务器上的 update.json 文件名（与更新源 REPOS 配置一致）
 # ⚠️ 本项目副本只保留自己这一条；接自有站兜底时，服务器 REPOS 需同步加一行
@@ -111,7 +115,7 @@ def _server_meta_url(api_url):
     if not m:
         return None
     key = _REPO_TO_APP.get(m.group(1).lower())
-    return "%s/updates/%s.json" % (SITE_URL, key) if key else None
+    return "%s/updates/%s.json" % (SITE_URL, key) if (key and SITE_URL) else None
 
 
 # ---------------- 公共 GitHub 加速镜像（2026-09-22 新增，同日调整为「主源」） ----------------
@@ -163,7 +167,7 @@ def _src_label(url):
     for p in MIRROR_PREFIXES:
         if u.startswith(p):
             return "加速镜像 %s" % p.split("//")[1].strip("/")
-    if u.startswith(SITE_URL):
+    if SITE_URL and u.startswith(SITE_URL):
         return "自有服务器"
     if "github.com/" in u:
         return "GitHub 原站"

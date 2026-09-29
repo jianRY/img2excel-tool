@@ -40,3 +40,6 @@ model_hash.txt
 
 # 项目内部记忆/工作区数据（不含代码，勿公开）
 .workbuddy/
+
+# 本机私有端点（源站地址等，绝不入库）
+_endpoints.py

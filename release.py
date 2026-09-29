@@ -84,7 +84,7 @@ ASSET_META = "update.json"          # ⚠️ 名字不能改：服务器脚本�
 # 短名 APP_KEY 必须三处一致：这里 / autoupdate.py 的 _REPO_TO_APP / 服务器 REPOS。
 # ⚠️ 这个地址客户端 exe 里必然明文存在（要连它才能兜底），改它等于让所有旧版失去兜底源；
 #    要覆盖请用环境变量 IMG2EXCEL_SITE_URL 或本机配置，**不要直接改这里的默认值**。
-SITE_URL = _cfg("IMG2EXCEL_SITE_URL", "site_url", "http://download.internal:8888")
+SITE_URL = _cfg("IMG2EXCEL_SITE_URL", "site_url", "")     # 本机配置，仓库里不留真地址
 APP_KEY = "img2excel"
 
 # 构建/签名用的解释器：默认就用「当前正在跑本脚本的解释器」——发版脚本本来就
