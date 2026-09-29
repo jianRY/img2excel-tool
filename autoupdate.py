@@ -97,8 +97,8 @@ except Exception:
 SITE_URL = ((os.environ.get("IMG2EXCEL_UPDATE_SITE") or "").strip()
             or _ENDPOINT_SITE)
 
-# GitHub 仓库 → 服务器上的 update.json 文件名（与更新源 REPOS 配置一致）
-# ⚠️ 本项目副本只保留自己这一条；接自有站兜底时，服务器 REPOS 需同步加一行
+# GitHub 仓库 → 更新源上的 update.json 文件名。
+# ⚠️ 本项目副本只保留自己这一条；接自有站兜底时，更新源需同步加一行
 #    "jianRY/img2excel-tool" -> "img2excel"（与实际部署路径一致）。
 _REPO_TO_APP = {
     "jianry/img2excel-tool": "img2excel",
