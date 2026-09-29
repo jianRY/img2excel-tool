@@ -1,0 +1,22 @@
+#!/bin/sh
+# 入库前敏感信息扫描。
+#
+# 本仓库是 public：开发机路径、用户名、凭据一旦进提交，就算 git rm 也只是从最新
+# 快照删掉，历史在 GitHub 上照样能翻到。所以卡在提交之前。
+#
+# 激活（每台机器一次）：git config core.hooksPath .githooks
+# 临时跳过：git commit --no-verify
+
+PY=$(command -v python || command -v python3)
+if [ -z "$PY" ]; then
+    echo "[pre-commit] 找不到 python，跳过敏感信息扫描"
+    exit 0
+fi
+
+"$PY" scan_sensitive.py --staged || {
+    echo ""
+    echo "[pre-commit] 检测到敏感信息，提交已中止。"
+    echo "             确认为误报可用：git commit --no-verify"
+    exit 1
+}
+exit 0
