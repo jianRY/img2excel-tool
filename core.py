@@ -11,7 +11,7 @@ from pathlib import Path
 
 import numpy as np
 
-APP_VERSION = "1.2.2"
+APP_VERSION = "1.3.0"
 
 IMG_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}
 PDF_EXTS = {".pdf"}

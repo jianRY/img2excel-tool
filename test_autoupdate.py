@@ -140,13 +140,15 @@ def test_update_json_contract():
         f.write(b"x" * 2048)
     _, data = R.make_update_json("1.2.1", exe, None, "测试")
 
-    need = ("version", "url", "fallback_url", "size", "sha256", "notes")
+    need = ("version", "url", "size", "sha256", "notes")
     for k in need:
         chk("含字段 %s" % k, k in data)
     chk("app 短名三处一致", data["app"] == A._REPO_TO_APP["jianry/img2excel-tool"])
     chk("url 是 GitHub 直链（主源）", "github.com" in data["url"])
-    chk("fallback_url 是自有站（兜底）", data["fallback_url"].startswith(A.SITE_URL))
-    chk("源语义没接反", "github.com" not in data["fallback_url"])
+    # ⚠️ 2026-09 隐私整改：update.json 是随 Release 公开的资产，**不得**写入私有更新地址。
+    #    这两条断言的方向与整改前相反 —— 记录的是「必须不含」，防止有人好心加回去。
+    chk("不含 fallback_url（私有地址不外泄）", "fallback_url" not in data)
+    chk("不含 site_url（私有地址不外泄）", "site_url" not in data)
     chk("sha256 与文件一致", data["sha256"] == R._sha256_of(exe))
     chk("落盘可解析", _json.load(open(data.get("_path", os.path.join(R.CACHE, "update.json")),
                                     encoding="utf-8"))["version"] == "1.2.1")

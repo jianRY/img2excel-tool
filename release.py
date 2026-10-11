@@ -522,9 +522,22 @@ def get_token():
     raise SystemExit("拿不到 GitHub token（wincred 里没有 github.com 凭据）")
 
 
+def gh_opener():
+    """构造访问 GitHub 的 opener：PROXY 有值走代理，None 走直连。
+
+    ⚠️⚠️ 直连必须传**空字典** `ProxyHandler({})`。曾写成
+    `ProxyHandler({"http": PROXY, "https": PROXY})`，PROXY 为 None 时字典值是 None，
+    urllib 会拿 None 去 _parse_proxy 解析，抛
+    `TypeError: expected string or bytes-like object, got 'NoneType'`。
+    症状极具迷惑性：打包/签名/git 推送全部成功，**只有 GitHub API 这一步崩**。
+    """
+    p = PROXY
+    return urllib.request.build_opener(
+        urllib.request.ProxyHandler({"http": p, "https": p} if p else {}))
+
+
 def api(path, token, data=None, method=None, timeout=120):
-    proxy = urllib.request.ProxyHandler({"http": PROXY, "https": PROXY})
-    op = urllib.request.build_opener(proxy)
+    op = gh_opener()
     h = {"Authorization": "Bearer " + token, "User-Agent": "curl/8",
          "Accept": "application/vnd.github+json"}
     body = None
@@ -682,8 +695,7 @@ def upload_asset(token, rid, path, name):
                 log("  已删除同名旧资产 %s" % name)
     except Exception as e:  # noqa: BLE001
         log("  同名资产检查失败（忽略）：%s" % e)
-    op = urllib.request.build_opener(
-        urllib.request.ProxyHandler({"http": PROXY, "https": PROXY}))
+    op = gh_opener()
     with open(path, "rb") as f:
         blob = f.read()
     url = ("https://uploads.github.com/repos/%s/releases/%s/assets?name=%s"
@@ -717,12 +729,16 @@ def make_update_json(ver, onefile, installer, notes):
     """生成 update.json —— 随 Release 作为附件上传，客户端靠它判断与校验更新。
 
     字段契约（客户端 fetch_update_info 直接读这些键，改键名等于断更）：
-        version / url（主源）/ fallback_url（兜底）/ size / sha256 / notes
+        version / url（GitHub 直链，主源）/ size / sha256 / notes
+        （有安装包时另有 setup_url / setup_size / setup_sha256）
 
-    ⚠️ 两个源的语义别搞反（2026-09-22 对调过）：
-      url          = GitHub Release 直链 → 客户端再展开成加速镜像变体并测速择优
-      fallback_url = 自有站直链，只在镜像与原站都不可用时才用
-    新旧客户端都按 url → fallback_url 顺序试，所以对调不破坏已发布版本。
+    ⚠️ url 的语义（2026-09-22 对调过）：
+      url = GitHub Release 直链 → 客户端再展开成加速镜像变体并测速择优
+
+    ⚠️ 不再写入 fallback_url / site_url：update.json 是**随 Release 公开的资产**，
+      把私有更新地址写进去等于把它公开（2026-09 隐私整改）。自有站兜底地址由
+      服务器侧 /updates/<APP_KEY>.json 提供，不随公开 Release 扩散。
+      客户端 `d.get("url"), d.get("fallback_url")` 的读法保持不变，缺键自动跳过。
 
     ⚠️ 附件名必须就叫 update.json：服务器脚本按这个名字去
       releases/latest/download/update.json 抄到 /updates/<APP_KEY>.json，改名即断链。
@@ -731,7 +747,6 @@ def make_update_json(ver, onefile, installer, notes):
     gh = "https://github.com/" + OWNER_REPO
     base_asset = ASSET_ONEFILE % ver
     setup_asset = ASSET_SETUP % ver
-    site = SITE_URL.rstrip("/")
 
     data = {
         "app": APP_KEY,
