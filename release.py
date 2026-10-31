@@ -154,12 +154,31 @@ def log(msg):
     print(">> " + msg, flush=True)
 
 
+def _decode(raw):
+    """解码子进程输出：先 UTF-8，失败再试 GBK。
+
+    ⚠️ 打包后的 exe 往管道写 stdout 时用的是系统本地编码（中文 Windows = GBK），
+    以前一律按 UTF-8 解 → `--version` 读出来是「ͼƬ����ת Excel ���� v1.3.1」，
+    版本号能靠数字蒙对，但日志正文全成了乱码，排查时根本没法看。
+    """
+    if isinstance(raw, str):
+        return raw
+    for enc in ("utf-8", "gbk"):
+        try:
+            return raw.decode(enc)
+        except UnicodeDecodeError:
+            continue
+    return raw.decode("utf-8", errors="replace")
+
+
 def run(cmd, cwd=None, check=True, env=None, timeout=None):
     try:
-        p = subprocess.run(cmd, cwd=cwd or ROOT, capture_output=True, text=True,
-                           encoding="utf-8", errors="replace", env=env, timeout=timeout)
+        p = subprocess.run(cmd, cwd=cwd or ROOT, capture_output=True,
+                           env=env, timeout=timeout)
     except subprocess.TimeoutExpired:
         raise SystemExit("命令超时(%ss)：%s" % (timeout, os.path.basename(str(cmd[0]))))
+    p.stdout = _decode(p.stdout)
+    p.stderr = _decode(p.stderr)
     if check and p.returncode != 0:
         print((p.stdout or "")[-2000:])
         print((p.stderr or "")[-2000:])
@@ -478,20 +497,33 @@ def copy_delivery(onefile, installer, ver):
     legacy_dir = os.path.join(DELIVERY, "_旧版备份")
     new_names = {nm for _, nm in pairs}
     legacy_files = []
+    seen = set()
     for pat in ("%s-单文件版.exe", "%s-安装版.exe",
                 "%s_v*_单文件版.exe", "%s_v*_安装版.exe",
                 # 上一个版本的绿色版（`图片表格转Excel助手_v1.3.0.exe`）也要归档，
                 # 否则每发一版就在交付目录里留一个 130MB 的旧文件。
                 # 本版新文件同样匹配该模式，由下面的 new_names 判等跳过。
                 "%s_v[0-9]*.exe"):
-        legacy_files += glob.glob(os.path.join(DELIVERY, pat % base))
+        for f in glob.glob(os.path.join(DELIVERY, pat % base)):
+            # ⚠️ 同一个文件可能同时命中多个模式（如 `xxx_v1.3.0_安装版.exe` 既中
+            #    `_v*_安装版` 又中别的模式）→ 列表里出现两次 → 第二次 move 报
+            #    WinError 2（源已不在）。按绝对路径去重。
+            k = os.path.normcase(os.path.abspath(f))
+            if k in seen:
+                continue
+            seen.add(k)
+            legacy_files.append(f)
     for p in legacy_files:
         nm = os.path.basename(p)
-        if nm in new_names:
+        if nm in new_names or not os.path.exists(p):
             continue
         try:
             os.makedirs(legacy_dir, exist_ok=True)
-            shutil.move(p, os.path.join(legacy_dir, nm))
+            dst = os.path.join(legacy_dir, nm)
+            if os.path.exists(dst):      # 上一轮已经归档过同名文件了
+                log("交付 -> 旧版已存在归档，跳过 %s" % nm)
+                continue
+            shutil.move(p, dst)
             log("交付 -> 旧命名归档 %s" % nm)
         except (OSError, shutil.Error) as e:
             log("!! 旧命名归档失败（忽略）：%s" % e)

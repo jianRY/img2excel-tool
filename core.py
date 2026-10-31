@@ -596,8 +596,9 @@ def convert_many(paths, progress_cb=None, log_cb=None, fix_nums=True,
                  page_cb=None):
     """批量转换，返回 (all_rows, errors)
     all_rows: List[List] —— [来源文件, 页码, 原文单元格1, 原文单元格2, ...]
-    fix_nums=True 时，单元格会做数值/日期清洗（千分位误判修正）。
     page_cb(page_no, total_pages, name)：页级进度回调（多页 PDF 用）。
+    fix_nums：只影响日志里「规整 N 个数值」的统计；真正的清洗固定在
+              write_excel -> parse_cell 一处完成，避免两套逻辑打架。
 
     ⚠️ 这里刻意**保留 OCR 原文**，清洗留给 write_excel -> parse_cell 做。
     以前在这一步就把文本换成数值、丢掉原文，导致「列N原文」输出的其实是
