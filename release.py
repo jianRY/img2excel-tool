@@ -82,9 +82,9 @@ ASSET_META = "update.json"          # ⚠️ 名字不能改：服务器脚本�
 # ---------------- 自有下载站（兜底源） ----------------
 # 客户端源顺序：加速镜像 → GitHub 原站 → 自有站 → GitHub API。
 # 短名 APP_KEY 必须三处一致：这里 / autoupdate.py 的 _REPO_TO_APP / 服务器 REPOS。
-# ⚠️ 这个地址客户端 exe 里必然明文存在（要连它才能兜底），改它等于让所有旧版失去兜底源；
-#    要覆盖请用环境变量 IMG2EXCEL_SITE_URL 或本机配置，**不要直接改这里的默认值**。
-SITE_URL = _cfg("IMG2EXCEL_SITE_URL", "site_url", "")     # 本机配置，仓库里不留真地址
+# ⚠️ 该地址与 autoupdate.py::SITE_URL 必须**完全一致**（客户端要连它才能兜底）。
+#    它是公开域名，不是秘密；换站时两处一起改 + 发版。
+SITE_URL = _cfg("IMG2EXCEL_SITE_URL", "site_url", "https://www.ruyi1617.cn").rstrip("/")
 APP_KEY = "img2excel"
 
 # 构建/签名用的解释器：默认就用「当前正在跑本脚本的解释器」——发版脚本本来就
@@ -403,7 +403,9 @@ def selftest(exe, label, expect_ver=None):
     os.makedirs(out, exist_ok=True)
     v = run([exe, "--version"], check=False, timeout=300)
     vout = (v.stdout or "").strip()
-    if "1." not in vout and "2." not in vout:
+    # ⚠️ 不要写死 "1." / "2." 这种前缀：版本到了 3.x 就会把正常产物判成异常。
+    #    只要求输出里出现任意 X.Y 形式的版本号即可。
+    if not re.search(r"\d+\.\d+", vout):
         raise SystemExit("%s --version 无输出，产物异常" % label)
     # ⚠️ 版本闸门第二道：确认打进包里的是本次目标版本（防「打包沿用了旧产物」）
     if expect_ver and expect_ver not in vout:
@@ -477,7 +479,11 @@ def copy_delivery(onefile, installer, ver):
     new_names = {nm for _, nm in pairs}
     legacy_files = []
     for pat in ("%s-单文件版.exe", "%s-安装版.exe",
-                "%s_v*_单文件版.exe", "%s_v*_安装版.exe"):
+                "%s_v*_单文件版.exe", "%s_v*_安装版.exe",
+                # 上一个版本的绿色版（`图片表格转Excel助手_v1.3.0.exe`）也要归档，
+                # 否则每发一版就在交付目录里留一个 130MB 的旧文件。
+                # 本版新文件同样匹配该模式，由下面的 new_names 判等跳过。
+                "%s_v[0-9]*.exe"):
         legacy_files += glob.glob(os.path.join(DELIVERY, pat % base))
     for p in legacy_files:
         nm = os.path.basename(p)

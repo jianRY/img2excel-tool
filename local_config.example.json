@@ -7,5 +7,6 @@
   "pyinstaller": "<pyinstaller.exe 绝对路径，省略则在 python 同目录下找>",
   "sign_py": "<代码签名脚本绝对路径，省略则找 .pybuild_cache/signing/sign.py>",
   "iscc": "<Inno Setup 的 ISCC.exe 绝对路径，省略则只找 Program Files 下的标准安装位置>",
-  "sample_dir": "<发版自检用的样本图片目录，省略则用项目内 verify/>"
+  "sample_dir": "<发版自检用的样本图片目录，省略则用项目内 verify/>",
+  "site_url": "<自有下载站根地址，省略则用代码里的默认值 https://www.ruyi1617.cn；只是发版脚本用于日志/校验，客户端地址在 autoupdate.py>"
 }

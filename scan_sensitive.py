@@ -104,7 +104,12 @@ def build_rules():
                       re.compile(re.escape(home).replace("\\\\", "[\\\\/]"), re.I),
                       "改用 os.path.expanduser('~') 或相对路径"))
     if host and len(host) > 3:
-        rules.append(("本机计算机名", re.compile(re.escape(host), re.I),
+        # ⚠️ 必须加边界：短机器名会命中任何包含它的词 —— 实测本机名只有 4 个字母，
+        #    结果把公开域名 www.ruyi1617.cn 里的 "ruyi" 也判成本机信息泄露。
+        #    前后限死「非字母数字」后，`ruyi1617` 这类连续标识不再误报。
+        rules.append(("本机计算机名",
+                      re.compile(r"(?<![A-Za-z0-9])%s(?![A-Za-z0-9])"
+                                 % re.escape(host), re.I),
                       "删掉；机器名没有出现在公开仓库的理由"))
 
     # ② 开发机工作区路径：本脚本所在目录及其上级，运行时才算出

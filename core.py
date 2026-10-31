@@ -107,8 +107,22 @@ def read_image(path: str):
 # ---------------------------------------------------------------- 数值清洗
 # 纯数字（含千分位 / 小数点 / 数字间误插空格），允许前后有空格或货币符号
 _NUM_RE = re.compile(r"^[\s¥￥$]*([+-]?\d[\d\s.,]*)[\s元]*$")
-# 日期：20240123 / 2024-01-23 / 2024/1/23
+# 日期：20240123 / 2024-01-23 / 2024/1/23 / 2024.1.23
 _DATE_RE = re.compile(r"^(\d{4})[-/.年]?(\d{1,2})[-/.月]?(\d{1,2})日?$")
+
+
+def _looks_thousands(int_part: str, dec_part: str) -> bool:
+    """判断 `7.500` / `2.903` 这类「整数 + 3 位尾数」是不是千分位被认成了小数点。
+
+    判据（点号与逗号**共用同一套**，2026-10-31 统一）：
+      · 尾数恰好 3 位数字；
+      · 整数部分 1~3 位且不以 0 开头 —— 标准千分位分组形态
+        （1.234 / 12.345 / 123.456 都成立，1234.567 不成立）。
+    旧实现里点号分支只认「整数部分恰好 3 位」，于是同一张票据上
+    `7.500` → 7.5、`7,500` → 7500，**差 1000 倍**，是真金白银的算错。
+    """
+    return (len(dec_part) == 3 and dec_part.isdigit() and int_part.isdigit()
+            and 1 <= len(int_part) <= 3 and not int_part.startswith("0"))
 
 
 def fix_number(text: str):
@@ -128,6 +142,10 @@ def fix_number(text: str):
         return "", raw
     m = _NUM_RE.match(s)
     if not m:
+        return raw, raw
+    # 日期串绝不参与数值清洗：`2024.01.23` 会被 _NUM_RE 认成数字，
+    # 再按「多个点」规则压成 202401.23 —— 日期被彻底毁掉，而且无法还原。
+    if "." in s and is_date(s):
         return raw, raw
     body = m.group(1)
     # 去掉数字之间的空格（"4. 69" / "2 903.00" / "2 . 9 0 3 . 0 0"）
@@ -160,16 +178,15 @@ def fix_number(text: str):
         else:
             body = body.replace(",", "")
     elif has_dot:
-        # 形如 "12.345" 的模糊情形：既可能是 12.345，也可能是 12345 被误加小数点。
-        # 金额场景下 3 位小数极罕见，但直接改判成整数风险更大——
-        # 因此只有在整数部分长度符合千分位分组规律（如 "2.903"）时才视为误判。
+        # 形如 "7.500" / "12.345" 的模糊情形：小数点被误认，实际是千分位。
+        # 判据与逗号分支**完全一致**（_looks_thousands），否则同一份票据上
+        # "7.500" 与 "7,500" 会差 1000 倍。原文照旧留在「列N原文」列可核对。
         int_part, _, dec_part = body.partition(".")
-        if (len(dec_part) == 3 and dec_part.isdigit() and int_part.isdigit()
-                and 1 <= len(int_part) <= 4 and (len(int_part) + 3) % 3 == 0):
+        if _looks_thousands(int_part, dec_part):
             body = int_part + dec_part
     elif has_comma:
         int_part, _, dec_part = body.partition(",")
-        if len(dec_part) == 3 and dec_part.isdigit():
+        if _looks_thousands(int_part, dec_part):
             body = int_part + dec_part
         else:
             body = int_part + "." + dec_part
@@ -181,8 +198,13 @@ def fix_number(text: str):
     except ValueError:
         return raw, raw
     # 整数且无小数位 -> 输出 int，避免 20240123 变 20240123.0
+    # ⚠️ 符号必须在**这个分支**就带上：以前只给浮点分支加负号，于是
+    #    "-5" 会被写成 5（而原文列写着 -5），负数差额 / 退款一律算反。
     if "." not in body:
-        return (int(val), raw) if abs(val) < 1e15 else (raw, raw)
+        iv = int(body)
+        if iv >= 10 ** 15:
+            return raw, raw
+        return (-iv if sign == "-" else iv), raw
     # 数值加符号
     if sign == "-":
         val = -val
@@ -498,18 +520,32 @@ def fallback_lines(img: np.ndarray, ocr_results):
 
 
 # ---------------------------------------------------------------- 单文件转换
-def convert_one(path: str):
-    """返回 [(页码, rows)]；rows 为该页的二维表格"""
+def convert_one(path: str, page_cb=None):
+    """返回 [(页码, rows)]；rows 为该页的二维表格。
+
+    读取失败返回 [("__error__", 说明)] —— 由 convert_many 收进 errors。
+    ⚠️ 绝不静默返回空列表：以前读图失败就是 `pages=[]`，批量 200 张少 3 张，
+       日志里一句提示都没有，用户还以为全转完了。
+    """
     ext = Path(path).suffix.lower()
-    pages = []
+    name = Path(path).name
     if ext in PDF_EXTS:
         pages = pdf_to_images(path)
+        if not pages:
+            return [("__error__", f"{name}: PDF 里没有可识别的页面")]
     else:
         img = read_image(path)
-        if img is not None:
-            pages = [(1, img)]
+        if img is None:
+            return [("__error__", f"{name}: 无法读取图片（文件损坏或格式不支持）")]
+        pages = [(1, img)]
     results = []
+    total = len(pages)
     for page_no, img in pages:
+        if page_cb:
+            try:
+                page_cb(page_no, total, name)   # 多页 PDF 的页级进度
+            except Exception:
+                pass
         try:
             boxes, txts, scores = ocr_image(img)
             if boxes is None:
@@ -528,19 +564,54 @@ def convert_one(path: str):
     return results
 
 
-def convert_many(paths, progress_cb=None, log_cb=None, fix_nums=True):
+def source_labels(paths):
+    """生成「来源文件」列的显示名，避免同名文件在结果里无法区分。
+
+    规则：默认 basename；发现重名时补一级上级目录（`文件夹/扫描件.jpg`）；
+    仍重名就用完整路径。以前一律 basename，导致两个目录里的同名扫描件
+    在 per_file 模式下被塞进同一个 sheet，合并模式下两行也分不清来源。
+    """
+    names = [Path(p).name for p in paths]
+    cnt = {}
+    for n in names:
+        cnt[n] = cnt.get(n, 0) + 1
+    if all(c == 1 for c in cnt.values()):
+        return {p: Path(p).name for p in paths}
+
+    cand = []
+    for p in paths:
+        pp = Path(p)
+        cand.append(f"{pp.parent.name}/{pp.name}" if cnt.get(pp.name, 0) > 1
+                    else pp.name)
+    cnt2 = {}
+    for n in cand:
+        cnt2[n] = cnt2.get(n, 0) + 1
+    out = {}
+    for p, n in zip(paths, cand):
+        out[p] = n if cnt2[n] == 1 else str(Path(p))
+    return out
+
+
+def convert_many(paths, progress_cb=None, log_cb=None, fix_nums=True,
+                 page_cb=None):
     """批量转换，返回 (all_rows, errors)
-    all_rows: List[List] —— [来源文件, 页码, col1, col2, ...]
+    all_rows: List[List] —— [来源文件, 页码, 原文单元格1, 原文单元格2, ...]
     fix_nums=True 时，单元格会做数值/日期清洗（千分位误判修正）。
+    page_cb(page_no, total_pages, name)：页级进度回调（多页 PDF 用）。
+
+    ⚠️ 这里刻意**保留 OCR 原文**，清洗留给 write_excel -> parse_cell 做。
+    以前在这一步就把文本换成数值、丢掉原文，导致「列N原文」输出的其实是
+    修正后的值（"2.903.00" 那列写着 2903.0），等于把核对依据一起抹掉了。
     """
     all_rows, errors = [], []
+    labels = source_labels(paths)
     n = len(paths)
     for idx, path in enumerate(paths, start=1):
-        name = Path(path).name
+        name = labels.get(path) or Path(path).name
         if log_cb:
             log_cb(f"[{idx}/{n}] 正在识别：{name}")
         try:
-            page_results = convert_one(path)
+            page_results = convert_one(path, page_cb=page_cb)
         except Exception as e:
             errors.append(f"{name}: {e}")
             if log_cb:
@@ -551,6 +622,8 @@ def convert_many(paths, progress_cb=None, log_cb=None, fix_nums=True):
         for page_no, rows in page_results:
             if isinstance(page_no, str) and page_no == "__error__":
                 errors.append(rows)
+                if log_cb:
+                    log_cb(f"[{idx}/{n}] 跳过：{rows}")
                 continue
             if rows is None:
                 continue
@@ -560,19 +633,15 @@ def convert_many(paths, progress_cb=None, log_cb=None, fix_nums=True):
                 continue
             fixed = 0
             for r in rows:
-                if fix_nums:
-                    cells, npair = [], 0
-                    for c in r:
-                        if c is None or c == "":
-                            cells.append("")
-                            continue
-                        v, _raw = fix_number(c)
-                        if isinstance(v, (int, float)):
-                            npair += 1
-                        cells.append(v)
-                    fixed += npair
-                else:
-                    cells = ["" if c is None else str(c) for c in r]
+                cells = []
+                for c in r:
+                    if c is None or c == "":
+                        cells.append("")
+                        continue
+                    txt = str(c)
+                    cells.append(txt)
+                    if fix_nums and isinstance(parse_cell(txt)[0], (int, float)):
+                        fixed += 1
                 all_rows.append([name, page_no] + cells)
             if fix_nums and fixed and log_cb:
                 log_cb(f"[{idx}/{n}] {name} 第{page_no}页："
@@ -591,14 +660,20 @@ def parse_cell(text):
     s = str(text).strip()
     if not s:
         return "", ""
-    v, _raw = fix_number(s)
-    if isinstance(v, (int, float)):
-        return v, "num"
+    # ① 日期优先：20240123 / 2024-01-23 / 2024.01.23 统一归一成 YYYY/MM/DD。
+    #    必须在 fix_number 之前判 —— 否则 8 位数字被当成普通整数（Excel 里显示
+    #    20,240,123），带点号的更会被压成 202401.23，跟说明页承诺的完全不符。
     if is_date(s):
         m = _DATE_RE.match(s)
         y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
-        # 8 位纯数字的日期在 Excel 里会变科学计数，统一插成斜杠格式
         return f"{y}/{mo:02d}/{d:02d}", "date"
+    # ② 前导零的纯数字（单号 / 票据号 0123）按文本保留：
+    #    转成 123 就跟原件对不上，跨系统核对直接断链。
+    if len(s) > 1 and s.isdigit() and s.startswith("0"):
+        return s, "text"
+    v, _raw = fix_number(s)
+    if isinstance(v, (int, float)):
+        return v, "num"
     return s, "text"
 
 
@@ -656,6 +731,11 @@ def _write_sheet(ws, rows, layout, styles):
                 else:
                     v, _k = parse_cell(raw)
             cell = ws.cell(row=ri, column=ci + 1, value=v)
+            # OCR 出的 `=1+2` 会被 openpyxl 当公式写进去（实测 data_type='f'）：
+            # Excel 打开就变成计算结果，内容与原单据不符，还存在公式注入风险。
+            # 强制按字符串写（xlsx 里就是一段普通文本，不加前导单引号）。
+            if isinstance(v, str) and v.startswith("="):
+                cell.data_type = "s"
             if kind.startswith("raw"):
                 cell.font = f_raw
                 cell.fill = fill_raw
@@ -752,15 +832,16 @@ def _add_notes_sheet(wb, rows, keep_raw):
     ws["A1"].font = title_f
     ws.merge_cells("A1:B1")
     notes = [
-        ("来源文件", "该行数据来自哪个图片 / PDF，按此列筛选可查看单个单据的全部内容。"),
+        ("来源文件", "该行数据来自哪个图片 / PDF；有同名文件时前面会带上所在文件夹，"
+                    "按此列筛选可查看单个单据的全部内容。"),
         ("页码", "PDF 的第几页；图片固定为 1。"),
         ("列N", "识别出的表格内容。纯数字已自动转成数值格式，可直接求和；"
-                "日期已归一为 YYYY/MM/DD。"),
+                "日期已归一为 YYYY/MM/DD；以 0 开头的单号/票据号按文本保留。"),
     ]
     if keep_raw:
         notes.append(
-            ("列N原文", "OCR 识别出的原始文本。程序会自动修正一些典型误判"
-                        "（如千分位逗号被认成小数点：2.903.00 → 2903.00、"
+            ("列N原文", "OCR 识别出的原始文本，**未做任何修改**。程序会自动修正一些典型误判"
+                        "（如千分位被认成小数点：2.903.00 → 2903.00、7.500 → 7500、"
                         "小数点后误插空格：4. 69 → 4.69）。核对时以「列N」为结果，"
                         "以「列N原文」为原始凭证；发现修正错误时可直接对照。"))
     notes += [

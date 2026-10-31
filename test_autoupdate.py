@@ -127,6 +127,41 @@ def test_urls():
     chk("认不出的仓库返回 None（自动跳过该级）", A._server_meta_url("https://x/y") is None)
 
 
+def test_site_url():
+    """站点迁移回归：地址必须与新站一致，且不能再残留旧 IP:端口。"""
+    print("\n[9] 自有站地址（2026-10-24 迁移后）")
+    chk("是 HTTPS 域名", A.SITE_URL.startswith("https://www.ruyi1617.cn"), A.SITE_URL)
+    chk("不再含旧 IP:端口", "47.116.64.26" not in A.SITE_URL and ":8888" not in A.SITE_URL, A.SITE_URL)
+    chk("结尾无斜杠（拼接不出双斜杠）", not A.SITE_URL.endswith("/"), A.SITE_URL)
+
+
+def test_site_file_fallback():
+    """只兜元数据不兜文件 = 「拿到版本号却下不到」，这条守住。"""
+    print("\n[10] 自有站文件兜底（update.json 里没有 fallback_url 时）")
+    chk("asset -> /files/<name>",
+        A._server_file_url("Img2ExcelTool_v1.3.1_onefile.exe")
+        == A.SITE_URL + "/files/Img2ExcelTool_v1.3.1_onefile.exe")
+    chk("没有 asset 返回 None", A._server_file_url(None) is None)
+
+    orig = A._http_json
+    A._http_json = lambda url, timeout=5: {
+        "version": "9.9.9",
+        "url": ("https://github.com/jianRY/img2excel-tool/releases/download/"
+                "v9.9.9/Img2ExcelTool_v9.9.9_onefile.exe"),
+        "asset": "Img2ExcelTool_v9.9.9_onefile.exe",
+        "notes": "",
+    }
+    try:
+        info = A.fetch_update_info(REPO_API)
+        urls = info["download_urls"]
+        chk("保留 GitHub 直链", any("github.com" in u for u in urls), urls)
+        chk("追加自有站文件直链",
+            urls[-1] == A.SITE_URL + "/files/Img2ExcelTool_v9.9.9_onefile.exe", urls)
+        chk("自有站排最后（不抢主源）", len(urls) == 2, urls)
+    finally:
+        A._http_json = orig
+
+
 def test_update_json_contract():
     """发版脚本生成的 update.json 必须与客户端读的键一致。"""
     print("\n[8] update.json 字段契约（发版侧 ↔ 客户端）")
@@ -166,6 +201,8 @@ if __name__ == "__main__":
     test_naming()
     test_urls()
     test_update_json_contract()
+    test_site_url()
+    test_site_file_fallback()
     print("\n" + "=" * 60)
     print("结果：%d 通过 / %d 失败" % (PASS, FAIL))
     print("=" * 60)

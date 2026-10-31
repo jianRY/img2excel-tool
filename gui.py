@@ -69,6 +69,20 @@ def log_dir() -> Path:
     return d
 
 
+def looks_like_installer(d: Path) -> bool:
+    """目录里是否有「安装版」的标志物。
+
+    Inno Setup 会留下 unins000.exe；PyInstaller 目录版（onedir）有 _internal 目录。
+    ⚠️ 只判「目录可写」是不够的：Inno 允许用户把安装目录改到 D 盘或用户目录，
+       那两处都是可写的 —— 于是安装版会被单文件版顶替，_internal 变成孤儿目录，
+       卸载清单与快捷方式指向的文件被悄悄换掉。
+    """
+    try:
+        return (d / "unins000.exe").exists() or (d / "_internal").is_dir()
+    except Exception:
+        return False
+
+
 def can_self_update() -> bool:
     """程序所在目录是否可写 —— 用来区分「绿色版 / 安装版」。
 
@@ -81,6 +95,8 @@ def can_self_update() -> bool:
     """
     try:
         d = program_dir()
+        if looks_like_installer(d):
+            return False
         probe = d / (".write_probe_%d.tmp" % os.getpid())
         probe.write_text("x", encoding="utf-8")
         probe.unlink()
@@ -108,8 +124,19 @@ class App(tk.Tk):
         self._build_styles()
         self._build_ui()
         self._set_icon()
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.after(100, self._poll_queue)
         self._init_autoupdate()
+
+    def _on_close(self):
+        """关窗确认：转换中直接关掉，几十分钟的识别结果会当场蒸发且毫无提示。"""
+        if self.worker is not None and self.worker.is_alive():
+            if not messagebox.askyesno(
+                    APP_TITLE,
+                    "正在转换中，现在退出会中断本次转换，已识别的结果不会保存。\n\n"
+                    "确定要退出吗？"):
+                return
+        self.destroy()
 
     def _set_icon(self):
         """设置窗口/任务栏图标（打包后从解包目录读取）"""
@@ -393,23 +420,32 @@ class App(tk.Tk):
         self.progress["value"] = 0
         self._log(f"开始转换 {len(self.files)} 个文件…")
         self.lbl_status.config(text="正在识别（首次运行需加载模型，请耐心等待）…")
+        # ⚠️ 选项必须在**主线程**取好再传给后台线程：
+        #    tkinter 变量不是线程安全的；而且用户中途改勾选会让同一个文件
+        #    「识别时一套参数、写 Excel 时另一套」，结果前后不一致。
         self.worker = threading.Thread(
-            target=self._work, args=(list(self.files), out), daemon=True)
+            target=self._work,
+            args=(list(self.files), out, bool(self.keep_raw.get()),
+                  bool(self.per_file.get())),
+            daemon=True)
         self.worker.start()
 
-    def _work(self, paths, out):
+    def _work(self, paths, out, keep_raw, per_file):
         try:
             def on_prog(i, n):
                 self.msg_q.put(("progress", i, n))
 
+            def on_page(page_no, total, name):
+                self.msg_q.put(("page", page_no, total, name))
+
             def on_log(msg):
                 self.msg_q.put(("log", msg))
 
-            rows, errors = core.convert_many(paths, progress_cb=on_prog, log_cb=on_log)
+            rows, errors = core.convert_many(
+                paths, progress_cb=on_prog, log_cb=on_log, page_cb=on_page)
             if rows:
                 core.write_excel(rows, out, paths,
-                                 keep_raw=self.keep_raw.get(),
-                                 per_file=self.per_file.get())
+                                 keep_raw=keep_raw, per_file=per_file)
                 self.msg_q.put(("done", out, len(rows), errors))
             else:
                 self.msg_q.put(("fail", "未识别出任何表格内容。" + ("；".join(errors) if errors else "")))
@@ -420,39 +456,57 @@ class App(tk.Tk):
     def _poll_queue(self):
         try:
             while True:
-                msg = self.msg_q.get_nowait()
-                kind = msg[0]
-                if kind == "progress":
-                    i, n = msg[1], msg[2]
-                    self.progress["value"] = i * 100.0 / max(n, 1)
-                    self.lbl_progress.config(text=f"进度：{i}/{n}")
-                elif kind == "log":
-                    self._log(msg[1])
-                elif kind == "done":
-                    out, nrows, errors = msg[1], msg[2], msg[3]
-                    self._refresh_tree_done()
-                    self.progress["value"] = 100
-                    self.lbl_progress.config(text="转换完成")
-                    self.lbl_status.config(text=f"完成 · 输出：{out}")
-                    self.btn_go.config(state="normal")
-                    self.btn_open.config(state="normal")
-                    self._log(f"转换完成，共写入 {nrows} 行，输出：{out}", "ok")
-                    for e in errors:
-                        self._log(f"部分文件处理异常：{e}", "err")
-                    messagebox.showinfo(APP_TITLE,
-                                        f"转换完成。\n共写入 {nrows} 行数据。\n"
-                                        f"输出文件：{out}"
-                                        + (f"\n\n有 {len(errors)} 个文件处理异常，详见日志。" if errors else ""))
-                elif kind == "fail":
-                    self.progress["value"] = 0
-                    self.lbl_progress.config(text="转换失败")
-                    self.lbl_status.config(text="失败，详见日志")
-                    self.btn_go.config(state="normal")
-                    self._log(msg[1], "err")
-                    messagebox.showerror(APP_TITLE, "转换失败，详见日志窗口。")
-        except queue.Empty:
-            pass
-        self.after(100, self._poll_queue)
+                try:
+                    msg = self.msg_q.get_nowait()
+                except queue.Empty:
+                    break
+                self._handle_msg(msg)
+        except Exception:
+            # ⚠️ 以前只捕 queue.Empty：任何一条消息处理时抛 TclError，
+            #    这个函数就再也不会被 after 重排 —— 界面永久冻住（后台还在跑），
+            #    用户只能强杀。这里兜底记录并继续泵。
+            self._log_file("消息处理异常：\n" + traceback.format_exc())
+        finally:
+            try:
+                self.after(100, self._poll_queue)
+            except Exception:
+                pass        # 窗口已销毁（退出中），无需再泵
+
+    def _handle_msg(self, msg):
+        kind = msg[0]
+        if kind == "progress":
+            i, n = msg[1], msg[2]
+            self.progress["value"] = i * 100.0 / max(n, 1)
+            self.lbl_progress.config(text=f"进度：{i}/{n}")
+        elif kind == "page":
+            # 页级进度：一个 200 页的 PDF 以前十分钟不动一格，观感就是「卡死」
+            page_no, total, name = msg[1], msg[2], msg[3]
+            self.lbl_progress.config(text=f"{name}：第 {page_no}/{total} 页")
+            self.lbl_status.config(text=f"正在识别 {name}（第 {page_no}/{total} 页）…")
+        elif kind == "log":
+            self._log(msg[1])
+        elif kind == "done":
+            out, nrows, errors = msg[1], msg[2], msg[3]
+            self._refresh_tree_done()
+            self.progress["value"] = 100
+            self.lbl_progress.config(text="转换完成")
+            self.lbl_status.config(text=f"完成 · 输出：{out}")
+            self.btn_go.config(state="normal")
+            self.btn_open.config(state="normal")
+            self._log(f"转换完成，共写入 {nrows} 行，输出：{out}", "ok")
+            for e in errors:
+                self._log(f"部分文件处理异常：{e}", "err")
+            messagebox.showinfo(APP_TITLE,
+                                f"转换完成。\n共写入 {nrows} 行数据。\n"
+                                f"输出文件：{out}"
+                                + (f"\n\n有 {len(errors)} 个文件处理异常，详见日志。" if errors else ""))
+        elif kind == "fail":
+            self.progress["value"] = 0
+            self.lbl_progress.config(text="转换失败")
+            self.lbl_status.config(text="失败，详见日志")
+            self.btn_go.config(state="normal")
+            self._log(msg[1], "err")
+            messagebox.showerror(APP_TITLE, "转换失败，详见日志窗口。")
 
     def _refresh_tree_done(self):
         for item in self.tree.get_children():
@@ -506,6 +560,11 @@ def selftest(argv):
     import sys
     keep_raw = "--no-raw" not in argv
     argv = [a for a in argv if a != "--no-raw"]
+    # ⚠️ 参数校验必须在 try 之外也先做：以前 argv[1] 直接下标，
+    #    `exe --selftest` 少传参数就是 IndexError，异常栈进了 stderr 谁都看不懂。
+    if len(argv) < 2:
+        print("用法：--selftest <输入文件或目录> <输出xlsx> [--no-raw]")
+        return 2
     log_path = str(Path(argv[1]).with_suffix(".selftest.log"))
     try:
         with open(log_path, "w", encoding="utf-8") as lf:

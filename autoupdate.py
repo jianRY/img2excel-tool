@@ -52,12 +52,14 @@ Release 要求：
 本项目（img2excel）接入备忘：
     - 宿主 = gui.py；配置文件 = %APPDATA%\\图片表格转Excel助手\\config.json（两种版本都可写，无需提权）
     - ⚠️ **安装版不参与自动更新**：安装在 Program Files（onedir 结构）时程序目录不可写，
-      宿主用 gui.py::_can_self_update() 判定，不可写就跳过自动检查；安装版升级靠重新下载安装包。
+      宿主用 gui.py::can_self_update() 判定（目录里有 unins000.exe / _internal 也直接判否），
+      不可写就跳过自动检查；安装版升级靠重新下载安装包。
       （若将来把 installer.iss 改成 PrivilegesRequired=lowest 装到用户目录，可再开放此限制。）
     - 交付文件名：单文件版 `图片表格转Excel助手_vX.Y.Z.exe`（**不要**带 `_单文件版` 后缀，
       否则首次更新后会被归一名，用户会困惑）；安装版 `图片表格转Excel助手_vX.Y.Z_安装版.exe`。
     - 发版侧由 release.py 生成 update.json（附件名**必须就叫** update.json）并随 Release 上传。
-    - 自有下载站兜底：见 _REPO_TO_APP，服务器需同步配 REPOS 一行。
+    - 自有下载站兜底：元数据 <SITE_URL>/updates/<app>.json，安装包 <SITE_URL>/files/<资产名>。
+      两处缺一不可 —— 只兜元数据会出现「拿到版本号却下不到文件」。
 """
 
 import atexit
@@ -75,6 +77,7 @@ import tkinter as tk
 from tkinter import messagebox, scrolledtext, ttk
 
 import urllib.error
+import urllib.parse
 import urllib.request
 
 UA = (
@@ -82,20 +85,24 @@ UA = (
     "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
 )
 
-# ---------------- 自有下载站（2026-09-22 新增） ----------------
+# ---------------- 自有下载站 ----------------
 # 起因：用户反馈从 GitHub 下载又慢又容易超时。于是搭了国内下载站，
 # 把更新元数据与 exe 同步过去，作为镜像/原站之外的兜底通路。
 #
-# ⚠️ 这个地址是**刻在客户端里**的（客户端要连它才能兜底），所以它本身不是秘密，
-#    但也**改不得**：改默认值会让所有已发布版本失去兜底源。
-#    要做环境隔离（内网镜像、联调）用环境变量 IMG2EXCEL_UPDATE_SITE 覆盖，
-#    不要动下面的默认值。
-try:
-    from _endpoints import SITE_URL as _ENDPOINT_SITE   # 本机私有，.gitignore 已排除
-except Exception:
-    _ENDPOINT_SITE = ""
-SITE_URL = ((os.environ.get("IMG2EXCEL_UPDATE_SITE") or "").strip()
-            or _ENDPOINT_SITE)
+# ⚠️ 地址直接写在这里，**不要再抽到单独的私有模块里**：
+#    早期版本用 `from _endpoints import SITE_URL`（该文件被 .gitignore 排除），
+#    结果打包时模块没进 exe，SITE_URL 恒为空 —— 兜底源在已发布的客户端里
+#    等于从未存在过，而且一声不响（2026-10-31 排查确认）。
+#    这个域名本身不是秘密（公开下载页），写死在客户端反而是正确做法。
+#
+# 站点迁移：2026-10-24 从旧的「IP + 端口」直连迁到现在的 HTTPS 域名，
+#    旧地址已不可达（实测连接被拒）。换站只改这一处 + 发版。
+#    联调 / 内网镜像用环境变量 IMG2EXCEL_UPDATE_SITE 覆盖。
+SITE_URL = "https://www.ruyi1617.cn"
+_override_site = (os.environ.get("IMG2EXCEL_UPDATE_SITE") or "").strip()
+if _override_site:
+    SITE_URL = _override_site
+SITE_URL = SITE_URL.rstrip("/")
 
 # GitHub 仓库 → 更新源上的 update.json 文件名。
 # ⚠️ 本项目副本只保留自己这一条；接自有站兜底时，更新源需同步加一行
@@ -116,6 +123,20 @@ def _server_meta_url(api_url):
         return None
     key = _REPO_TO_APP.get(m.group(1).lower())
     return "%s/updates/%s.json" % (SITE_URL, key) if (key and SITE_URL) else None
+
+
+def _server_file_url(asset):
+    """自有站上的安装包直链：<SITE_URL>/files/<资产名>。asset 缺失返回 None。
+
+    为什么需要它：update.json 是**随 Release 公开的资产**，不能把站内地址写进去，
+    所以线上那份文件里没有 fallback_url。只看 update.json 的 `url`，
+    一旦 GitHub 与所有加速镜像同时不通，就会出现「拿到了版本号却下不到文件」——
+    自有站白搭。这里用 asset 名自己拼一条兜底直链。
+    """
+    a = str(asset or "").strip()
+    if not (a and SITE_URL):
+        return None
+    return "%s/files/%s" % (SITE_URL, urllib.parse.quote(a))
 
 
 # ---------------- 公共 GitHub 加速镜像（2026-09-22 新增，同日调整为「主源」） ----------------
@@ -496,6 +517,11 @@ def fetch_update_info(latest_api_url, timeout=5, log_fn=None):
             continue
         if isinstance(d, dict) and d.get("version") and d.get("url"):
             urls = [u for u in (d.get("url"), d.get("fallback_url")) if u]
+            # 自有站文件兜底（见 _server_file_url）：放在最后，不影响源排序规则
+            # （自有站永远排最后一级），但没有它时「镜像全挂 = 完全下不到」。
+            site_file = _server_file_url(d.get("asset"))
+            if site_file and site_file not in urls:
+                urls.append(site_file)
             _log("已从 %s 获取版本信息：v%s" % (source, d["version"]))
             return {
                 "tag": str(d["version"]).strip(),
@@ -1491,6 +1517,12 @@ class DownloadProgressDialog(tk.Toplevel):
         def _force():
             try:
                 master.quit()
+            except Exception:  # noqa: BLE001
+                pass
+            # ⚠️ os._exit 会跳过 atexit —— 待改名登记会就此丢失，
+            #    程序永远停在 `xxx_更新中.exe`。退出前手动执行一次（幂等）。
+            try:
+                apply_pending_rename(self._log_fn)
             except Exception:  # noqa: BLE001
                 pass
             os._exit(0)

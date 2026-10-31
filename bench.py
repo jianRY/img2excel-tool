@@ -35,7 +35,10 @@ for i, f in enumerate(picked, 1):
     rows, errors = core.convert_many([f])
     dt = time.time() - t0
     total_t += dt
-    nums = sum(1 for r in rows for c in r[2:] if isinstance(c, (int, float)))
+    # ⚠️ convert_many 现在保留 OCR 原文（清洗在写 Excel 时做），所以这里要用
+    #    parse_cell 判定，不能直接 isinstance —— 否则永远统计出 0 个数值。
+    nums = sum(1 for r in rows for c in r[2:]
+               if isinstance(core.parse_cell(c)[0], (int, float)))
     cols = max((len(r) for r in rows), default=0)
     summary.append((name, len(rows), cols, nums, dt, len(errors)))
     print(f"[{i}/{len(picked)}] {name[:44]}")
