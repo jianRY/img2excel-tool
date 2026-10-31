@@ -663,6 +663,18 @@ def git_commit_tag_push(ver, token):
         git("config", "--unset", "https.proxy", check=False)
 
 
+def _strip_notes_heading(notes):
+    """去掉更新说明开头自带的标题。
+
+    notes 文件习惯以 `## 本次更新` / `### 本次更新` 起头，而 release_body 自己
+    已经加了一行 `## 本次更新`，不清理就会在线上看到两个连着的同名标题。
+    """
+    lines = (notes or "").strip().splitlines()
+    while lines and (not lines[0].strip() or lines[0].lstrip().startswith("#")):
+        lines.pop(0)
+    return "\n".join(lines).strip()
+
+
 def release_body(ver, onefile_mb, setup_mb, notes=""):
     """Release 正文：本次更新 + 下载表 + 使用提示。
 
@@ -670,8 +682,9 @@ def release_body(ver, onefile_mb, setup_mb, notes=""):
     内部细节一律不写进来。
     """
     parts = []
-    if notes:
-        parts.append("## 本次更新\n\n%s\n\n" % notes.strip())
+    body_notes = _strip_notes_heading(notes)
+    if body_notes:
+        parts.append("## 本次更新\n\n%s\n\n" % body_notes)
     parts.append(
         "## 下载\n\n"
         "| 版本 | 文件 | 大小 | 说明 |\n|---|---|---|---|\n"
