@@ -1,10 +1,28 @@
 # ---- 构建产物 ----
 build/
 dist/
+releases/
 .pybuild_cache/
 *.spec.bak
 *.pyc
 __pycache__/
+
+# ---- 生成物（可由脚本重新产出，不入库）----
+assets/app_icon_preview.png
+
+# ---- 编辑器 / 系统杂项 ----
+.idea/
+.vscode/
+.vs/
+*.swp
+*.swo
+*~
+*.bak
+*.orig
+*.rej
+.DS_Store
+Thumbs.db
+desktop.ini
 
 # ---- 运行/测试残留 ----
 *.selftest.log

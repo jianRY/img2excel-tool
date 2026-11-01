@@ -1,0 +1,20 @@
+# 图片表格转 Excel 助手 —— 依赖清单
+#
+# 安装：
+#   pip install -r requirements.txt
+#
+# 下面锁的是本项目实际验证通过的版本（打包 + 全量回归 + 真机验收均在此组合下通过）。
+# 若换机器遇到安装问题，可放宽为「>=最低版本」再自行取最新。
+
+# ---- 运行时必需 ----
+rapidocr-onnxruntime==1.2.3     # 文字识别（OCR）
+rapid-table==3.0.2              # 表格结构还原（SLANet-Plus）
+onnxruntime==1.30.0             # OCR / 表格模型的推理引擎
+opencv-python==5.0.0.93         # 图像预处理与透视矫正
+numpy==2.5.3                    # 数值运算
+PyMuPDF==1.28.2                 # PDF 分页转图
+openpyxl==3.1.5                 # Excel 写出
+pillow==12.3.0                  # 图标生成（make_icon.py）
+
+# ---- 构建/发版需要（运行 exe 不需要）----
+pyinstaller==6.22.2             # 打包单文件版与目录版
