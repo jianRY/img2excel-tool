@@ -86,7 +86,7 @@
 ## 从源码构建
 
 ```bash
-pip install rapidocr-onnxruntime rapid-table onnxruntime opencv-python PyMuPDF openpyxl
+pip install -r requirements.txt     # 依赖版本已锁定，可复现构建
 python gui.py                      # 直接运行
 python release.py                  # 一键发版（双版本打包 + 自检 + 签名 + 交付）
 ```
@@ -110,13 +110,17 @@ Inno Setup、测试样本目录…）。这些**一律不写进仓库**，走 `d
 |---|---|
 | `core.py` | 识别管线：文件收集、PDF 转图、OCR、表格还原、数值清洗、Excel 写出 |
 | `gui.py` | Tkinter 界面 + `--selftest` / `--version` 命令行入口 + 自动更新接线 |
-| `autoupdate.py` | 自动更新模块：检查更新、进度弹窗、就地替换（零第三方依赖） |
+| `autoupdate.py` | 自动更新的**适配层**：声明本项目配置并转发共享内核接口 |
+| `updater_core.py` | 共享更新内核（纯逻辑：版本比较 / 源排序 / 元数据 / 校验 / 落位 / 清理） |
+| `updater_gui.py` | 共享更新内核的界面层（更新弹窗 / 下载进度框） |
 | `devconfig.py` | 开发/构建脚本的本机配置读取（环境变量 → 本机 json → 默认值） |
 | `models/slanet-plus.onnx` | 表格结构识别模型 |
 | `assets/app.ico` | 应用图标（由 `make_icon.py` 几何绘制生成） |
 | `图片表格转Excel助手.spec` | 单文件版打包配置 |
 | `安装版.spec` + `installer.iss` | 目录版 + Inno Setup 安装包 |
 | `release.py` | 一键发版：双版本打包 → 自检 → 双签名 → 交付 → 发布 GitHub |
+| `requirements.txt` | 依赖清单（锁定验证通过的版本） |
+| `LICENSE` | MIT 许可证 |
 
 ### 测试脚本
 
