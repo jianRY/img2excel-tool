@@ -1,11 +1,23 @@
 # ---- 构建产物 ----
 build/
 dist/
+dist_*/
 releases/
 .pybuild_cache/
 *.spec.bak
 *.pyc
+*.pyo
 __pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.tmp
+*.old
+
+# ---- 前端 / Node（本项目无前端，防御性排除） ----
+node_modules/
+.next/
+out/
 
 # ---- 生成物（可由脚本重新产出，不入库）----
 assets/app_icon_preview.png
